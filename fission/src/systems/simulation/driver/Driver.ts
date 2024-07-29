@@ -1,5 +1,22 @@
+import { mirabuf } from "@/proto/mirabuf"
+
 abstract class Driver {
-    public abstract Update(deltaT: number): void;
+    private _info?: mirabuf.IInfo
+
+    constructor(info?: mirabuf.IInfo) {
+        this._info = info
+    }
+
+    public abstract Update(deltaT: number): void
+
+    public get info() {
+        return this._info
+    }
 }
 
-export default Driver;
+export enum DriverControlMode {
+    Velocity = 0,
+    Position = 1,
+}
+
+export default Driver

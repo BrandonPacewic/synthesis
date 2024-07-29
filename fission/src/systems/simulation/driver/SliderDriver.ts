@@ -1,51 +1,86 @@
-import Jolt from "@barclah/jolt-physics";
-import Driver from "./Driver";
-import { SIMULATION_PERIOD } from "@/systems/physics/PhysicsSystem";
-import JOLT from "@/util/loading/JoltSyncLoader";
+import Jolt from "@barclah/jolt-physics"
+import Driver, { DriverControlMode } from "./Driver"
+import { GetLastDeltaT } from "@/systems/physics/PhysicsSystem"
+import JOLT from "@/util/loading/JoltSyncLoader"
+import { mirabuf } from "@/proto/mirabuf"
 
 class SliderDriver extends Driver {
+    private _constraint: Jolt.SliderConstraint
 
-    private _constraint: Jolt.SliderConstraint;
-    private _targetPosition: number = 0.0;
+    private _controlMode: DriverControlMode = DriverControlMode.Velocity
+    private _targetVelocity: number = 0.0
+    private _targetPosition: number = 0.0
+
+    public get targetVelocity(): number {
+        return this._targetVelocity
+    }
+    public set targetVelocity(radsPerSec: number) {
+        this._targetVelocity = radsPerSec
+    }
 
     public get targetPosition(): number {
-        return this._targetPosition;
+        return this._targetPosition
     }
     public set targetPosition(position: number) {
-        this._targetPosition = Math.max(this._constraint.GetLimitsMin(), Math.min(this._constraint.GetLimitsMax(), position));
+        this._targetPosition = Math.max(
+            this._constraint.GetLimitsMin(),
+            Math.min(this._constraint.GetLimitsMax(), position)
+        )
     }
 
     public set minForceLimit(newtons: number) {
-        const motorSettings = this._constraint.GetMotorSettings();
-        motorSettings.mMinForceLimit = newtons;
+        const motorSettings = this._constraint.GetMotorSettings()
+        motorSettings.mMinForceLimit = newtons
     }
     public set maxForceLimit(newtons: number) {
-        const motorSettings = this._constraint.GetMotorSettings();
-        motorSettings.mMaxForceLimit = newtons;
+        const motorSettings = this._constraint.GetMotorSettings()
+        motorSettings.mMaxForceLimit = newtons
     }
 
-    public constructor(constraint: Jolt.SliderConstraint) {
-        super();
+    public get controlMode(): DriverControlMode {
+        return this._controlMode
+    }
 
-        this._constraint = constraint;
+    public set controlMode(mode: DriverControlMode) {
+        this._controlMode = mode
+        switch (mode) {
+            case DriverControlMode.Velocity:
+                this._constraint.SetMotorState(JOLT.EMotorState_Velocity)
+                break
+            case DriverControlMode.Position:
+                this._constraint.SetMotorState(JOLT.EMotorState_Position)
+                break
+            default:
+                // idk
+                break
+        }
+    }
 
-        const motorSettings = this._constraint.GetMotorSettings();
-        const springSettings = motorSettings.mSpringSettings;
-        springSettings.mFrequency = 20 * (1.0 / SIMULATION_PERIOD);
-        springSettings.mDamping = 0.995;
+    public constructor(constraint: Jolt.SliderConstraint, info?: mirabuf.IInfo) {
+        super(info)
 
-        motorSettings.mSpringSettings = springSettings;
-        motorSettings.mMinForceLimit = -125.0;
-        motorSettings.mMaxForceLimit = 125.0;
+        this._constraint = constraint
 
-        this._constraint.SetMotorState(JOLT.EMotorState_Position);
+        const motorSettings = this._constraint.GetMotorSettings()
+        const springSettings = motorSettings.mSpringSettings
+        springSettings.mFrequency = 20 * (1.0 / GetLastDeltaT())
+        springSettings.mDamping = 0.999
 
-        this.targetPosition = this._constraint.GetCurrentPosition();
+        motorSettings.mSpringSettings = springSettings
+        motorSettings.mMinForceLimit = -900.0
+        motorSettings.mMaxForceLimit = 900.0
+
+        this._constraint.SetMotorState(JOLT.EMotorState_Velocity)
+        this.controlMode = DriverControlMode.Velocity
     }
 
     public Update(_: number): void {
-        this._constraint.SetTargetPosition(this._targetPosition);
+        if (this._controlMode == DriverControlMode.Velocity) {
+            this._constraint.SetTargetVelocity(this._targetVelocity)
+        } else if (this._controlMode == DriverControlMode.Position) {
+            this._constraint.SetTargetPosition(this._targetPosition)
+        }
     }
 }
 
-export default SliderDriver;
+export default SliderDriver

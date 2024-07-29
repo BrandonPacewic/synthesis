@@ -22,15 +22,23 @@ Each root child has a number of children that are all rigidly attached to the dy
 
 """
 
-import adsk.fusion, adsk.core, traceback, uuid
-
-from proto.proto_out import types_pb2, joint_pb2, signal_pb2, motor_pb2, assembly_pb2
+import traceback
+import uuid
 from typing import Union
 
+import adsk.core
+import adsk.fusion
+
+from proto.proto_out import assembly_pb2, joint_pb2, motor_pb2, signal_pb2, types_pb2
+
 from ...general_imports import *
-from .Utilities import fill_info, construct_info, guid_occurrence
+from ...Logging import getLogger
+from ...Types import JointParentType, SignalType
+from ..ExporterOptions import ExporterOptions
 from .PDMessage import PDMessage
-from .. import ParseOptions
+from .Utilities import construct_info, fill_info, guid_occurrence
+
+logger = getLogger()
 
 
 # Need to take in a graphcontainer
@@ -59,96 +67,87 @@ def populateJoints(
     joints: joint_pb2.Joints,
     signals: signal_pb2.Signals,
     progressDialog: PDMessage,
-    options: ParseOptions,
+    options: ExporterOptions,
     assembly: assembly_pb2.Assembly,
 ):
     fill_info(joints, None)
 
     # This is for creating all of the Joint Definition objects
     # So we need to iterate through the joints and construct them and add them to the map
-    if options.joints or DEBUG:
-        # Add the grounded joints object - TODO: rename some of the protobuf stuff for the love of god
+    if not options.joints:
+        return
 
-        joint_definition_ground = joints.joint_definitions["grounded"]
-        construct_info("grounded", joint_definition_ground)
+    # Add the grounded joints object - TODO: rename some of the protobuf stuff for the love of god
+    joint_definition_ground = joints.joint_definitions["grounded"]
+    construct_info("grounded", joint_definition_ground)
 
-        joint_instance_ground = joints.joint_instances["grounded"]
-        construct_info("grounded", joint_instance_ground)
+    joint_instance_ground = joints.joint_instances["grounded"]
+    construct_info("grounded", joint_instance_ground)
 
-        joint_instance_ground.joint_reference = joint_definition_ground.info.GUID
+    joint_instance_ground.joint_reference = joint_definition_ground.info.GUID
 
-        # Add the rest of the dynamic objects
+    # Add the rest of the dynamic objects
 
-        for joint in list(design.rootComponent.allJoints) + list(
-            design.rootComponent.allAsBuiltJoints
-        ):
-            if joint.isSuppressed:
-                continue
+    for joint in list(design.rootComponent.allJoints) + list(design.rootComponent.allAsBuiltJoints):
+        if joint.isSuppressed:
+            continue
 
-            # turn RigidJoints into RigidGroups
-            if joint.jointMotion.jointType == 0:
-                _addRigidGroup(joint, assembly)
-                continue
+        # turn RigidJoints into RigidGroups
+        if joint.jointMotion.jointType == 0:
+            _addRigidGroup(joint, assembly)
+            continue
 
-            # for now if it's not a revolute or slider joint ignore it
-            if joint.jointMotion.jointType != 1 and joint.jointMotion.jointType != 2:
-                continue
+        # for now if it's not a revolute or slider joint ignore it
+        if joint.jointMotion.jointType != 1 and joint.jointMotion.jointType != 2:
+            continue
 
-            try:
-                #  Fusion has no instances of joints but lets roll with it anyway
+        try:
+            #  Fusion has no instances of joints but lets roll with it anyway
 
-                # progressDialog.message = f"Exporting Joint configuration {joint.name}"
-                progressDialog.addJoint(joint.name)
+            # progressDialog.message = f"Exporting Joint configuration {joint.name}"
+            progressDialog.addJoint(joint.name)
 
-                # create the definition
-                joint_definition = joints.joint_definitions[joint.entityToken]
-                _addJoint(joint, joint_definition)
+            # create the definition
+            joint_definition = joints.joint_definitions[joint.entityToken]
+            _addJoint(joint, joint_definition)
 
-                # create the instance of the single definition
-                joint_instance = joints.joint_instances[joint.entityToken]
+            # create the instance of the single definition
+            joint_instance = joints.joint_instances[joint.entityToken]
 
-                for parse_joints in options.joints:
-                    if parse_joints.joint_token == joint.entityToken:
-                        guid = str(uuid.uuid4())
-                        signal = signals.signal_map[guid]
-                        construct_info(joint.name, signal, GUID=guid)
-                        signal.io = signal_pb2.IOType.OUTPUT
+            for parse_joints in options.joints:
+                if parse_joints.jointToken == joint.entityToken:
+                    guid = str(uuid.uuid4())
+                    signal = signals.signal_map[guid]
+                    construct_info(joint.name, signal, GUID=guid)
+                    signal.io = signal_pb2.IOType.OUTPUT
 
-                        # really could just map the enum to a friggin string
-                        if (
-                            parse_joints.signalType != ParseOptions.SignalType.PASSIVE
-                            and assembly.dynamic
-                        ):
-                            if parse_joints.signalType == ParseOptions.SignalType.CAN:
-                                signal.device_type = signal_pb2.DeviceType.CANBUS
-                            elif parse_joints.signalType == ParseOptions.SignalType.PWM:
-                                signal.device_type = signal_pb2.DeviceType.PWM
+                    # really could just map the enum to a friggin string
+                    if parse_joints.signalType != SignalType.PASSIVE and assembly.dynamic:
+                        if parse_joints.signalType == SignalType.CAN:
+                            signal.device_type = signal_pb2.DeviceType.CANBUS
+                        elif parse_joints.signalType == SignalType.PWM:
+                            signal.device_type = signal_pb2.DeviceType.PWM
 
-                            motor = joints.motor_definitions[joint.entityToken]
-                            fill_info(motor, joint)
-                            simple_motor = motor.simple_motor
-                            simple_motor.stall_torque = parse_joints.force
-                            simple_motor.max_velocity = parse_joints.speed
-                            simple_motor.braking_constant = 0.8  # Default for now
-                            joint_definition.motor_reference = joint.entityToken
+                        motor = joints.motor_definitions[joint.entityToken]
+                        fill_info(motor, joint)
+                        simple_motor = motor.simple_motor
+                        simple_motor.stall_torque = parse_joints.force
+                        simple_motor.max_velocity = parse_joints.speed
+                        simple_motor.braking_constant = 0.8  # Default for now
+                        joint_definition.motor_reference = joint.entityToken
 
-                            joint_instance.signal_reference = signal.info.GUID
-                        # else:
-                        #     signals.signal_map.remove(guid)
+                        joint_instance.signal_reference = signal.info.GUID
+                    # else:
+                    #     signals.signal_map.remove(guid)
 
-                _addJointInstance(
-                    joint, joint_instance, joint_definition, signals, options
-                )
+            _addJointInstance(joint, joint_instance, joint_definition, signals, options)
 
-                # adds information for joint motion and limits
-                _motionFromJoint(joint.jointMotion, joint_definition)
+            # adds information for joint motion and limits
+            _motionFromJoint(joint.jointMotion, joint_definition)
 
-            except:
-                err_msg = "Failed:\n{}".format(traceback.format_exc())
-                logging.getLogger(f"{INTERNAL_ID}.JointParser").error(
-                    "Failed:\n{}".format(traceback.format_exc())
-                )
-                continue
+        except:
+            logger.error("Failed:\n{}".format(traceback.format_exc()))
+            continue
 
 
 def _addJoint(joint: adsk.fusion.Joint, joint_definition: joint_pb2.Joint):
@@ -164,10 +163,8 @@ def _addJoint(joint: adsk.fusion.Joint, joint_definition: joint_pb2.Joint):
         joint_definition.origin.x = 0.0
         joint_definition.origin.y = 0.0
         joint_definition.origin.z = 0.0
-        if DEBUG:
-            logging.getLogger(f"{INTERNAL_ID}.JointParser._addJoint").error(
-                f"Cannot find joint origin on joint {joint.name}"
-            )
+
+        logger.error(f"Cannot find joint origin on joint {joint.name}")
 
     joint_definition.break_magnitude = 0.0
 
@@ -177,7 +174,7 @@ def _addJointInstance(
     joint_instance: joint_pb2.JointInstance,
     joint_definition: joint_pb2.Joint,
     signals: signal_pb2.Signals,
-    options: ParseOptions,
+    options: ExporterOptions,
 ):
     fill_info(joint_instance, joint)
     # because there is only one and we are using the token - should be the same
@@ -208,9 +205,11 @@ def _addJointInstance(
 
     if options.wheels:
         for wheel in options.wheels:
-            if wheel.joint_token == joint.entityToken:
+            if wheel.jointToken == joint.entityToken:
                 joint_definition.user_data.data["wheel"] = "true"
-                joint_definition.user_data.data["wheelType"] = str(wheel.wheelType)
+
+                # Must convert type 'enum' to int to store wheelType in mirabuf
+                joint_definition.user_data.data["wheelType"] = str(wheel.wheelType.value - 1)
 
                 # if it exists get it and overwrite the signal type
                 if joint_instance.signal_reference:
@@ -222,10 +221,10 @@ def _addJointInstance(
                     signal.io = signal_pb2.IOType.OUTPUT
                     joint_instance.signal_reference = signal.info.GUID
 
-                if wheel.signalType != ParseOptions.SignalType.PASSIVE:
-                    if wheel.signalType == ParseOptions.SignalType.CAN:
+                if wheel.signalType != SignalType.PASSIVE:
+                    if wheel.signalType == SignalType.CAN:
                         signal.device_type = signal_pb2.DeviceType.CANBUS
-                    elif wheel.signalType == ParseOptions.SignalType.PWM:
+                    elif wheel.signalType == SignalType.PWM:
                         signal.device_type = signal_pb2.DeviceType.PWM
                 else:
                     joint_instance.signal_reference = ""
@@ -244,9 +243,7 @@ def _addRigidGroup(joint: adsk.fusion.Joint, assembly: assembly_pb2.Assembly):
     assembly.data.joints.rigid_groups.append(mira_group)
 
 
-def _motionFromJoint(
-    fusionMotionDefinition: adsk.fusion.JointMotion, proto_joint: joint_pb2.Joint
-) -> None:
+def _motionFromJoint(fusionMotionDefinition: adsk.fusion.JointMotion, proto_joint: joint_pb2.Joint) -> None:
     # if fusionJoint.geometryOrOriginOne.objectType == "adsk::fusion::JointGeometry"
     # create the DOF depending on what kind of information the joint has
 
@@ -260,20 +257,16 @@ def _motionFromJoint(
         6: noop,  # TODO: Implement
     }
 
-    fillJointMotionFunc = fillJointMotionFuncSwitcher.get(
-        fusionMotionDefinition.jointType, lambda: None
-    )
+    fillJointMotionFunc = fillJointMotionFuncSwitcher.get(fusionMotionDefinition.jointType, lambda: None)
 
     fillJointMotionFunc(fusionMotionDefinition, proto_joint)
 
 
-def fillRevoluteJointMotion(
-    revoluteMotion: adsk.fusion.RevoluteJointMotion, proto_joint: joint_pb2.Joint
-):
+def fillRevoluteJointMotion(revoluteMotion: adsk.fusion.RevoluteJointMotion, proto_joint: joint_pb2.Joint):
     """#### Fill Protobuf revolute joint motion data
 
     Args:
-        revoluteMotion (adsk.fusion.RevoluteJointMotion): Fusion 360 Revolute Joint Data
+        revoluteMotion (adsk.fusion.RevoluteJointMotion): Fusion Revolute Joint Data
         protoJoint (joint_pb2.Joint): Protobuf joint that is being modified
     """
 
@@ -311,13 +304,11 @@ def fillRevoluteJointMotion(
         dof.axis.z = int(rotationAxis == 1)
 
 
-def fillSliderJointMotion(
-    sliderMotion: adsk.fusion.SliderJointMotion, proto_joint: joint_pb2.Joint
-) -> None:
+def fillSliderJointMotion(sliderMotion: adsk.fusion.SliderJointMotion, proto_joint: joint_pb2.Joint) -> None:
     """#### Fill Protobuf slider joint motion data
 
     Args:
-        sliderMotion (adsk.fusion.SliderJointMotion): Fusion 360 Slider Joint Data
+        sliderMotion (adsk.fusion.SliderJointMotion): Fusion Slider Joint Data
         protoJoint (joint_pb2.Joint): Protobuf joint that is being modified
 
     """
@@ -384,13 +375,11 @@ def _searchForGrounded(
     return None
 
 
-def _jointOrigin(
-    fusionJoint: Union[adsk.fusion.Joint, adsk.fusion.AsBuiltJoint]
-) -> adsk.core.Point3D:
+def _jointOrigin(fusionJoint: Union[adsk.fusion.Joint, adsk.fusion.AsBuiltJoint]) -> adsk.core.Point3D:
     """#### Joint Origin Internal Finder that was orignally created for Synthesis by Liam Wang
 
     Args:
-        joint (Union[adsk.fusion.Joint, adsk.fusion.AsBuiltJoint]): A Fusion 360 Joint that is either a Proper or As Build Joint
+        joint (Union[adsk.fusion.Joint, adsk.fusion.AsBuiltJoint]): A Fusion Joint that is either a Proper or As Build Joint
 
     Returns:
         Point3D by Autodesk Fusion
@@ -417,9 +406,7 @@ def _jointOrigin(
                 newEnt = ent.createForAssemblyContext(fusionJoint.occurrenceOne)
                 min = newEnt.boundingBox.minPoint
                 max = newEnt.boundingBox.maxPoint
-                org = adsk.core.Point3D.create(
-                    (max.x + min.x) / 2.0, (max.y + min.y) / 2.0, (max.z + min.z) / 2.0
-                )
+                org = adsk.core.Point3D.create((max.x + min.x) / 2.0, (max.y + min.y) / 2.0, (max.z + min.z) / 2.0)
                 return org  # ent.startVertex.geometry
             else:
                 return geometryOrOrigin.origin
@@ -434,19 +421,11 @@ def _jointOrigin(
     else:  # adsk::fusion::JointOrigin
         origin = geometryOrOrigin.geometry.origin
         # todo: Is this the correct way to calculate a joint origin's true location? Why isn't this exposed in the API?
-        offsetX = (
-            0 if geometryOrOrigin.offsetX is None else geometryOrOrigin.offsetX.value
-        )
-        offsetY = (
-            0 if geometryOrOrigin.offsetY is None else geometryOrOrigin.offsetY.value
-        )
-        offsetZ = (
-            0 if geometryOrOrigin.offsetZ is None else geometryOrOrigin.offsetZ.value
-        )
+        offsetX = 0 if geometryOrOrigin.offsetX is None else geometryOrOrigin.offsetX.value
+        offsetY = 0 if geometryOrOrigin.offsetY is None else geometryOrOrigin.offsetY.value
+        offsetZ = 0 if geometryOrOrigin.offsetZ is None else geometryOrOrigin.offsetZ.value
         # noinspection PyArgumentList
-        return adsk.core.Point3D.create(
-            origin.x + offsetX, origin.y + offsetY, origin.z + offsetZ
-        )
+        return adsk.core.Point3D.create(origin.x + offsetX, origin.y + offsetY, origin.z + offsetZ)
 
 
 def createJointGraph(
@@ -474,40 +453,31 @@ def createJointGraph(
     # first iterate through to create the nodes
     for supplied_joint in supplied_joints:
         newNode = types_pb2.Node()
-        newNode.value = supplied_joint.joint_token
+        newNode.value = supplied_joint.jointToken
         node_map[newNode.value] = newNode
 
     # second sort them
     for supplied_joint in supplied_joints:
-        current_node = node_map[supplied_joint.joint_token]
-        if supplied_joint.parent == 0:
-            node_map["ground"].children.append(node_map[supplied_joint.joint_token])
-        elif (
-            node_map[supplied_joint.parent] is not None
-            and node_map[supplied_joint.joint_token] is not None
-        ):
-            node_map[supplied_joint.parent].children.append(
-                node_map[supplied_joint.joint_token]
-            )
+        current_node = node_map[supplied_joint.jointToken]
+        if supplied_joint.parent == JointParentType.ROOT:
+            node_map["ground"].children.append(node_map[supplied_joint.jointToken])
+        elif node_map[supplied_joint.parent.value] is not None and node_map[supplied_joint.jointToken] is not None:
+            node_map[supplied_joint.parent].children.append(node_map[supplied_joint.jointToken])
         else:
-            logging.getLogger("JointHierarchy").error(
-                f"Cannot construct hierarhcy because of detached tree at : {supplied_joint.joint_token}"
-            )
+            logger.error(f"Cannot construct hierarhcy because of detached tree at : {supplied_joint.jointToken}")
 
     for node in node_map.values():
         # append everything at top level to isolate kinematics
         joint_tree.nodes.append(node)
 
 
-def addWheelsToGraph(
-    wheels: list, rootNode: types_pb2.Node, joint_tree: types_pb2.GraphContainer
-):
+def addWheelsToGraph(wheels: list, rootNode: types_pb2.Node, joint_tree: types_pb2.GraphContainer):
     for wheel in wheels:
         # wheel name
         # wheel signal
         # wheel occ id
         # these don't have children
         wheelNode = types_pb2.Node()
-        wheelNode.value = wheel.occurrence_token
+        wheelNode.value = wheel.occurrenceToken
         rootNode.children.append(wheelNode)
         joint_tree.nodes.append(wheelNode)
