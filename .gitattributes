@@ -1,1 +1,2 @@
 * text=auto
+/fission/**/*.json linguist-language=TypeScript
